@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/gorilla/mux"
 )
@@ -242,6 +245,17 @@ func HandlerDeleteCompletedTasks(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, "postgres://postgres:113355@localhost:5432/postgres")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	if err := conn.Ping(ctx); err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println("TQ")
 	router := mux.NewRouter()
 	router.Path("/tasks").Methods("POST").HandlerFunc(HandlerCreateTask)
 	router.Path("/tasks").Methods("GET").HandlerFunc(HandlerGetAllTasks)
