@@ -1,74 +1,30 @@
 package main
 
 import (
+	"ToDo/database"
+	"ToDo/todo"
+
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sync"
-	"time"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/gorilla/mux"
 )
 
 var mtx sync.Mutex
 var RWmtx sync.RWMutex
+var db database.Database
 
-type Task struct {
-	Title      string     `json:"title"`
-	Desc       string     `json:"description"`
-	Priority   int        `json:"priority"`
-	Status     bool       `json:"status"`
-	DateCreate time.Time  `json:"dateCreate"`
-	DateCompl  *time.Time `json:"dateComplete"`
-}
-
-type TaskDTO struct {
-	Title    string `json:"title"`
-	Desc     string `json:"description"`
-	Priority int    `json:"priority"`
-}
-
-func CreateTask(title, desc string, priority int) Task {
-	return Task{
-		Title:      title,
-		Desc:       desc,
-		Priority:   priority,
-		Status:     false,
-		DateCreate: time.Now(),
-		DateCompl:  nil,
-	}
-}
-
-func CreateTaskDTO(title, desc string, priority int) TaskDTO {
-	return TaskDTO{
-		Title:    title,
-		Desc:     desc,
-		Priority: priority,
-	}
-}
-
-func (t *Task) CompleteTask() {
-	t.Status = true
-	temp := time.Now()
-	t.DateCompl = &temp
-}
-
-func (t *Task) UncompleteTask() {
-	t.Status = false
-	t.DateCompl = nil
-}
-
-var list = map[string]*Task{}
+var list = map[string]*todo.Task{}
 
 func HandlerCreateTask(w http.ResponseWriter, r *http.Request) {
 
 	mtx.Lock()
 	defer mtx.Unlock()
-	var temp TaskDTO
+	var temp todo.TaskDTO
 	if err := json.NewDecoder(r.Body).Decode(&temp); err != nil {
 		w.WriteHeader(400)
 		w.Write([]byte(err.Error()))
@@ -84,7 +40,11 @@ func HandlerCreateTask(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Priority would be for 1 to 3"))
 		return
 	}
-	task := CreateTask(temp.Title, temp.Desc, temp.Priority)
+	task := todo.CreateTask(temp.Title, temp.Desc, temp.Priority)
+	if err := db.Insert(db.Ctx, db.Conn, task.Title, task.Desc, task.Priority, task.Status, task.DateCreate); err != nil {
+		fmt.Println(err)
+		return
+	}
 	list[temp.Title] = &task
 	data, err := json.MarshalIndent(task, "", "\t")
 	if err != nil {
@@ -146,6 +106,7 @@ func HandlerChangeTask(w http.ResponseWriter, r *http.Request) {
 	mtx.Lock()
 	defer mtx.Unlock()
 	title := mux.Vars(r)["title"]
+	titleStart := title
 	if len(list) == 0 {
 		w.WriteHeader(400)
 		w.Write([]byte("No have any task"))
@@ -157,7 +118,7 @@ func HandlerChangeTask(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	temp := Task{}
+	temp := todo.Task{}
 	err = json.Unmarshal(httpRequestBody, &temp)
 	if err != nil {
 		w.WriteHeader(500)
@@ -192,7 +153,6 @@ func HandlerChangeTask(w http.ResponseWriter, r *http.Request) {
 		list[title].Priority = temp.Priority
 	}
 	if temp.Status != list[title].Status {
-		list[title].Status = temp.Status
 		if temp.Status == true {
 			list[title].CompleteTask()
 		} else {
@@ -205,6 +165,14 @@ func HandlerChangeTask(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
+
+	taskmodel := database.TaskModel{}
+	taskmodel.Title = list[title].Title
+	taskmodel.Desc = list[title].Desc
+	taskmodel.Priority = list[title].Priority
+	taskmodel.Status = list[title].Status
+	taskmodel.DateCompl = list[title].DateCompl
+	db.Update(db.Ctx, db.Conn, taskmodel, titleStart)
 	w.WriteHeader(200)
 	w.Write(data)
 
@@ -224,6 +192,7 @@ func HandlerDeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(list, title)
+	db.Delete(db.Ctx, db.Conn, title)
 	w.WriteHeader(200)
 
 }
@@ -239,6 +208,7 @@ func HandlerDeleteCompletedTasks(w http.ResponseWriter, r *http.Request) {
 		if task.Status == true {
 			delete(list, title)
 		}
+		db.DeleteCompletedTasks(db.Ctx, db.Conn)
 	}
 
 }
@@ -246,16 +216,30 @@ func HandlerDeleteCompletedTasks(w http.ResponseWriter, r *http.Request) {
 func main() {
 
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, "postgres://postgres:113355@localhost:5432/postgres")
+	conn, err := database.Connect(ctx)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	if err := conn.Ping(ctx); err != nil {
+
+	db.InsertConn(ctx, conn)
+
+	if err := database.CreateTable(db.Ctx, db.Conn); err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println("TQ")
+
+	ListTaskModel := []database.TaskModel{}
+	err, ListTaskModel = db.GetAllTasks(db.Ctx, db.Conn)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	for i := 0; i < len(ListTaskModel); i++ {
+		task := todo.TaskConvert(ListTaskModel[i])
+		list[ListTaskModel[i].Title] = &task
+	}
+
 	router := mux.NewRouter()
 	router.Path("/tasks").Methods("POST").HandlerFunc(HandlerCreateTask)
 	router.Path("/tasks").Methods("GET").HandlerFunc(HandlerGetAllTasks)
