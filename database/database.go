@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -24,7 +25,8 @@ type TaskModel struct {
 
 func Connect(ctx context.Context) (*pgx.Conn, error) {
 
-	return pgx.Connect(ctx, "postgres://postgres:113355@localhost:5432/postgres")
+	conn_string := os.Getenv("CONN_STRING")
+	return pgx.Connect(ctx, conn_string)
 
 }
 
